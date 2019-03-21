@@ -11,7 +11,9 @@
 
 namespace compact {
 
-uint64_t get_bits_per_element(const std::string& fname) {
+static uint64_t get_bits_per_element(const std::string& fname) __attribute__ ((unused));
+
+static uint64_t get_bits_per_element(const std::string& fname) {
 	// load the vector by reading from file
 	std::ifstream ifile(fname, std::ios::binary);
 	uint64_t static_flag{0};

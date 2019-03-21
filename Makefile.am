@@ -12,7 +12,7 @@ pkgconfig_DATA = compact_vector.pc
 # Unit tests
 ##############################
 TESTS = all_tests
-check_PROGRAMS = all_tests bit_vector_speed
+check_PROGRAMS = all_tests bit_vector_speed bit_vector_mmap
 
 all_tests_CXXFLAGS = $(AM_CXXFLAGS) $(GTEST_CFLAGS) # -I$(top_srcdir)/unittests
 all_tests_LDFLAGS = -pthread
@@ -21,3 +21,4 @@ all_tests_SOURCES = unittests/test_compact_vector.cc unittests/test_dyn.cc unitt
 all_tests_SOURCES += unittests/test_compact_vector.hpp
 
 bit_vector_speed_SOURCES = tests/bit_vector_speed.cc tests/misc.hpp
+bit_vector_mmap_SOURCES = tests/bit_vector_mmap.cc tests/misc.hpp
