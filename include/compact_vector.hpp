@@ -3,10 +3,24 @@
 
 #include <new>
 #include <stdexcept>
-
+#include <fstream>
+#include <cstring>
+#include <system_error> // for std::error_code
+#include "mio.hpp"
 #include "compact_iterator.hpp"
 
 namespace compact {
+
+uint64_t get_bits_per_element(const std::string& fname) {
+	// load the vector by reading from file
+	std::ifstream ifile(fname, std::ios::binary);
+	uint64_t static_flag{0};
+	ifile.read(reinterpret_cast<char*>(&static_flag), sizeof(static_flag));
+	uint64_t bits_per_element;
+	ifile.read(reinterpret_cast<char*>(&bits_per_element), sizeof(bits_per_element));
+	ifile.close();
+	return bits_per_element;
+}
 
 namespace vector_imp {
 inline int clz(unsigned int x) { return __builtin_clz(x); }
@@ -21,6 +35,7 @@ class vector {
   size_t    m_size;             // Size in number of elements
   size_t    m_capacity;         // Capacity in number of elements
   W*        m_mem;
+  mio::mmap_source ro_mmap;
 
 public:
   // Number of bits required for indices/values in the range [0, s).
@@ -54,7 +69,9 @@ public:
     : vector(0, 0, allocator)
   { }
   ~vector() {
-    m_allocator.deallocate(m_mem, elements_to_words(m_capacity, bits()));
+    if (!ro_mmap.is_mapped()) {
+      m_allocator.deallocate(m_mem, elements_to_words(m_capacity, bits()));
+    }
   }
 
   const_iterator begin() const { return const_iterator(m_mem, bits(), 0); }
@@ -113,6 +130,77 @@ public:
   static constexpr unsigned static_bits() { return BITS; }
   static constexpr unsigned used_bits() { return UB; }
   static constexpr bool thread_safe() { return TS; }
+
+  void serialize(std::ofstream& of) {
+    uint64_t static_flag = (static_bits() == bits()) ? 1 : 0;
+    of.write(reinterpret_cast<char*>(&static_flag), sizeof(static_flag));
+    if (static_flag != 0) {
+      uint64_t bits_per_element = static_bits();
+      of.write(reinterpret_cast<char*>(&bits_per_element), sizeof(bits_per_element));
+    } else {
+      uint64_t bits_per_element = bits();
+      of.write(reinterpret_cast<char*>(&bits_per_element), sizeof(bits_per_element));
+    }
+    uint64_t w_size = m_size;
+    of.write(reinterpret_cast<char*>(&w_size), sizeof(w_size));
+    uint64_t w_capacity = m_capacity;
+    of.write(reinterpret_cast<char*>(&w_capacity), sizeof(w_capacity));
+    of.write(reinterpret_cast<char*>(m_mem), bytes());
+    std::cerr << "wrote " << bytes() << " bytes of data at the end\n";
+  }
+
+  void deserialize(const std::string& fname, bool mmap) {
+    std::error_code error;
+    if (mmap) {
+      // load the vector *read only* by mmap
+      ro_mmap.map(fname, error);
+      if (error) { std::cerr << "error = " << error << "\n"; }
+      const char* data = ro_mmap.data();
+      data += sizeof(uint64_t);
+      uint64_t bits_per_element;
+      std::memcpy(reinterpret_cast<void*>(&bits_per_element), reinterpret_cast<void*>(const_cast<char*>(data)), sizeof(bits_per_element));
+      //std::cerr<< "bits / element = " << bits_per_element << "\n";
+      data += sizeof(W);
+      uint64_t w_size{0};
+      std::memcpy(reinterpret_cast<void*>(&w_size), reinterpret_cast<void*>(const_cast<char*>(data)), sizeof(w_size));
+      m_size = w_size;
+      //std::cerr<< "size = " << m_size << "\n";
+      data += sizeof(w_size);
+      uint64_t w_capacity{0};
+      std::memcpy(reinterpret_cast<void*>(&w_capacity), reinterpret_cast<void*>(const_cast<char*>(data)), sizeof(w_capacity));
+      m_capacity = w_capacity;
+      //std::cerr<< "capacity = " << m_capacity << "\n";
+      data += sizeof(w_capacity);
+      m_allocator.deallocate(m_mem, elements_to_words(m_capacity, bits()));
+      m_mem = reinterpret_cast<W*>(const_cast<char*>(data));
+    } else {
+      // load the vector by reading from file
+      std::ifstream ifile(fname, std::ios::binary);
+      uint64_t static_flag{0};
+      ifile.read(reinterpret_cast<char*>(&static_flag), sizeof(static_flag));
+
+      uint64_t bits_per_element;
+      ifile.read(reinterpret_cast<char*>(&bits_per_element), sizeof(bits_per_element));
+
+      //std::cerr<< "bits / element = " << bits_per_element << "\n";
+
+      uint64_t w_size{0};
+      ifile.read(reinterpret_cast<char*>(&w_size), sizeof(w_size));
+      m_size = w_size;
+      //std::cerr<< "size = " << m_size << "\n";
+
+      uint64_t w_capacity{0};
+      ifile.read(reinterpret_cast<char*>(&w_capacity), sizeof(w_capacity));
+      m_capacity = w_capacity;
+      //std::cerr<< "capacity = " << m_capacity << "\n";
+
+      m_allocator.deallocate(m_mem, elements_to_words(m_capacity, bits()));
+      m_mem = m_allocator.allocate(elements_to_words(m_capacity, bits()));
+      if(m_mem == nullptr) throw std::bad_alloc();
+      ifile.read(reinterpret_cast<char*>(m_mem), sizeof(W) * elements_to_words(m_size, bits()));
+    }
+
+  }
 
 protected:
   void enlarge() {
